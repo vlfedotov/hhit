@@ -1,5 +1,9 @@
+import queue
 import re
 import requests
+import time
+import threading
+
 from collections import defaultdict
 from collections import Counter
 
@@ -22,51 +26,91 @@ class TechCounter(object):
                           'strong', 'office', 'you', 'at', 'us', 'flexible', 'working', 'engineer', 'saint',
                           'what', 'required', 'education', 'good', 'responsibilities', 'please', 'medical',
                           'russian', }
+        self.queue = None
 
     def add_parasites(self, parasites):
         self._parasites += parasites
 
+    def get_page(self, url, data=None):
+        return requests.get(url=url, params=data).json()
+
+    def get_words(self, vacancies):
+        for vacancy in vacancies:
+            if vacancy['archived']:
+                continue
+            url_vac = vacancy['url']
+            resp_vac = self.get_page(url_vac)
+
+            desc = set()
+            name = set()
+
+            try:
+                desc_raw = self._tech_names_pat.findall(resp_vac['description'])
+                for d in desc_raw:
+                    desc.add(d.rstrip('.').lower())
+                desc -= self._parasites
+            except KeyError as e:
+                print('no desc', end=' ')
+
+            try:
+                name_raw = self._tech_names_pat.findall(resp_vac['name'])
+                for n in name_raw:
+                    name.add(n.rstrip('.').lower())
+                name -= self._parasites
+            except KeyError as e:
+                print('no name', end=' ')
+
+            if desc:
+                self.description_rows.append(desc)
+                self.description_all_words.update(desc)
+            if name:
+                self.name_rows.append(name)
+                self.name_all_words.update(name)
+
     def get_words_and_rows(self, pages=100, start_page=0):
+        start = time.time()
         print('page:')
         for page in range(start_page, pages):
             print(page + 1, end=' ')
             data_vac = {"specialization": "1", "area": self._city_code, 'page': page}
 
-            resp_vac = requests.get(url=url_vacancies, params=data_vac).json()
+            resp_vac = self.get_page(url_vacancies, data_vac)
             vacancies = resp_vac['items']
 
-            for vacancy in vacancies:
-                if not vacancy['archived']:
-                    url_vac = vacancy['url']
-                    resp_vac = requests.get(url=url_vac).json()
+            self.get_words(vacancies)
 
-                    desc = set()
-                    name = set()
-
-                    try:
-                        desc_raw = self._tech_names_pat.findall(resp_vac['description'])
-                        for d in desc_raw:
-                            desc.add(d.rstrip('.').lower())
-                        desc -= self._parasites
-                    except KeyError as e:
-                        print('no desc', end=' ')
-
-                    try:
-                        name_raw = self._tech_names_pat.findall(resp_vac['name'])
-                        for n in name_raw:
-                            name.add(n.rstrip('.').lower())
-                        name -= self._parasites
-                    except KeyError as e:
-                        print('no name', end=' ')
-
-                    if desc:
-                        self.description_rows.append(desc)
-                        self.description_all_words.update(desc)
-                    if name:
-                        self.name_rows.append(name)
-                        self.name_all_words.update(name)
-
+        print('Entire job took:', time.time()-start)
         return 'Ok'
+
+    def get_page_from_queue(self):
+        while True:
+            page = self.queue.get()
+            with self.lock:
+                print(page['page'], end=' ')
+            vacancies = page['items']
+            self.get_words(vacancies)
+            self.queue.task_done()
+
+    def get_words_and_rows_with_threading(self, pages=100, start_page=0, threads=8):
+        start_th = time.time()
+        self.queue = queue.Queue(pages-start_page)
+        self.lock = threading.Lock()
+
+        print('page:')
+
+        for _ in range(threads):
+            th = threading.Thread(target=self.get_page_from_queue)
+            th.daemon = True
+            th.start()
+
+        for page in range(start_page, pages):
+            data_vac = {"specialization": "1", "area": self._city_code, 'page': page}
+            self.queue.put(self.get_page(url_vacancies, data_vac))
+
+        self.queue.join()
+
+        print('Entire job took:', time.time()-start_th)
+        return 'OK'
 
     def get_int_combinations(self, int_words):
         res_words = defaultdict(Counter)
