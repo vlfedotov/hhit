@@ -126,8 +126,9 @@ class TechCounter(object):
     def show_int_combinations(self, first_most_common=20, second_most_common=10):
         ints = [x for x,y in self.description_all_words.most_common(first_most_common)]
         res_words = self.get_int_combinations(ints)
+        l_word = max(len(x) for x in res_words)
         for key in res_words:
-            print(key, '\r\t\t=>\t', [x for x,y in res_words[key].most_common(second_most_common)])
+            print(key.ljust(l_word), '=>\t', [x for x,y in res_words[key].most_common(second_most_common)])
 
     def delete_parasites(self, parasites):
         self._parasites.add(parasites)
